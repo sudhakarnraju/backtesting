@@ -7,26 +7,58 @@ var unzipper = require("unzipper");
 var path = require('path');
 const filePath = path.join(__dirname, '../files/');
 var result = {data: []};
+var processCompletionStatus = 0;
+var fromDate = moment('01-01-2013','DD-MM-YYYY');
+var toDate = moment('03-01-2013','DD-MM-YYYY');
+toDate = toDate.add(1, 'days')
+var noOfDays = toDate.diff(fromDate, 'days');
+var nsePrefix =  'https://www.nseindia.com/archives/combine_report/combined_report';
 
 module.exports = (data, next) => {
   // Examples
   //TODO: Download options data
-  const downloadFiles = async function(date){
-    var url = 'https://www.nseindia.com/archives/combine_report/combined_report'+date+'.zip';
+  function downloadFiles(date, zipFileName, xlFileName){
+    var url = nsePrefix+date+'.zip';
     var requestData = request(url);
     requestData.on('response',  function (res) {
-      console.log("Date--------"+date);
-      res.pipe(fs.createWriteStream(filePath+date+'.zip'));
+      var stream = fs.createWriteStream(filePath+date+'.zip');
+      res.pipe(stream);
+      stream.on('finish', function () {
+        unzipFiles(zipFileName, xlFileName);
+      });
     });
   }
-  const unzipFiles = async function(fileName){
+  function unzipFiles(fileName, xlFileName){
     try {
-      fs.createReadStream(fileName).pipe(unzipper.Extract({ path: filePath }));
+      var stream = unzipper.Extract({ path: filePath })
+      fs.createReadStream(fileName).pipe(stream);
+      stream.on('finish', function () {
+        var jsonResult = convertXlToJSON(xlFileName);
+        result.data.push(jsonResult.Report1);
+        processCompletionCheck();
+      });
     } catch (e) {
-      console.log("No such file"+fileName);
+      console.log("Error"+fileName);
     }
   }
-  const convertXlToJSON = async function(filename){
+  function processCompletionCheck(){
+    processCompletionStatus++;
+    if(processCompletionStatus == noOfDays){
+      generateFinalResult();
+    }
+  }
+  function generateFinalResult(){
+    fs.writeFileSync(filePath+'finalResult.txt', JSON.stringify(result));
+  }
+  const getDate  = async function (){
+    for (var m = moment(fromDate); m.isBefore(toDate); m.add(1, 'days')) {
+      var date = m.format('DD-MM-YYYY').replace(/-/g,'');
+      var zipFileName = filePath+date+".zip";
+      var xlFileName = filePath+"combined_report"+date+".xls";
+      downloadFiles(date, zipFileName, xlFileName);
+    }
+  }
+  function convertXlToJSON(filename){
     try {
       const result = excelToJson({
         header:{
@@ -84,23 +116,7 @@ module.exports = (data, next) => {
       console.log("Error " + e);
     }
   }
-  const getDate  = async function (){
-    var fromDate = moment('01-01-2013','DD-MM-YYYY');
-    var toDate = moment('03-01-2013','DD-MM-YYYY');
-    for (var m = moment(fromDate); m.isBefore(toDate); m.add(1, 'days')) {
-      var date = m.format('DD-MM-YYYY').replace(/-/g,'');
-      var zipFileName = filePath+date+".zip";
-      var xlFileName = filePath+"combined_report"+date+".xls";
-      await downloadFiles(date); //TODO: sync not working
-      await unzipFiles(zipFileName); //TODO: sync not working
-      var completeResult = await convertXlToJSON(xlFileName); //TODO: sync not working
-      console.log("Result :" + JSON.stringify(completeResult.Report1[0]));
-      result.data.push(completeResult.Report1);
-    }
-    fs.writeFileSync(filePath+'filename.txt', JSON.stringify(result));
-  }
   getDate();
-  console.log("TODO: Download options data");
   data.optionsToday = result;
-  next(null, data); //Do not send more than one result, though framework allows it
+  // next(null, data); //Do not send more than one result, though framework allows it
 };
